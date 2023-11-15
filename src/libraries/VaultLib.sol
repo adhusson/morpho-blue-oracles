@@ -10,9 +10,9 @@ import {IERC4626} from "../interfaces/IERC4626.sol";
 library VaultLib {
     /// @dev Converts `shares` into the corresponding assets on the `vault`.
     /// @dev When `vault` is the address zero, returns 1.
-    function getAssets(IERC4626 vault, uint256 shares) internal view returns (uint256) {
-        if (address(vault) == address(0)) return 1;
+    function getAssets(address vault, uint256 shares) internal view returns (uint256) {
+        if (vault == address(0)) return 1;
 
-        return vault.convertToAssets(shares);
+        return IERC4626(vault).convertToAssets(shares);
     }
 }

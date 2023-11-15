@@ -6,106 +6,99 @@ import {IOracle} from "../lib/morpho-blue/src/interfaces/IOracle.sol";
 import {AggregatorV3Interface, ChainlinkDataFeedLib} from "./libraries/ChainlinkDataFeedLib.sol";
 import {IERC4626, VaultLib} from "./libraries/VaultLib.sol";
 import {ErrorsLib} from "./libraries/ErrorsLib.sol";
+import {Source,SourceLib} from "./libraries/SourceLib.sol";
 
 /// @title ChainlinkOracle
 /// @author Morpho Labs
 /// @custom:contact security@morpho.org
-/// @notice Morpho Blue oracle using Chainlink-compliant feeds.
+/// @notice Morpho Blue oracle using Chainlink-compliant feeds and 4626 vaults.
 contract ChainlinkOracle is IOracle {
-    using VaultLib for IERC4626;
-    using ChainlinkDataFeedLib for AggregatorV3Interface;
+    using SourceLib for Source;
 
     /* IMMUTABLES */
 
-    /// @notice Vault.
-    IERC4626 public immutable VAULT;
-    /// @notice Vault conversion sample. The sample amount of shares used to convert to the underlying asset.
-    /// @notice Should be chosen such that converting `VAULT_CONVERSION_SAMPLE` to assets has enough precision.
-    uint256 public immutable VAULT_CONVERSION_SAMPLE;
-    /// @notice First base feed.
-    AggregatorV3Interface public immutable BASE_FEED_1;
-    /// @notice Second base feed.
-    AggregatorV3Interface public immutable BASE_FEED_2;
-    /// @notice First quote feed.
-    AggregatorV3Interface public immutable QUOTE_FEED_1;
-    /// @notice Second quote feed.
-    AggregatorV3Interface public immutable QUOTE_FEED_2;
     /// @notice Price scale factor, computed at contract creation.
     uint256 public immutable SCALE_FACTOR;
 
     /* CONSTRUCTOR */
+    /// @notice First base source address.
+    address public immutable BASE_SOURCE_1_ADDRESS;
+    /// @notice Second base source address.
+    address public immutable BASE_SOURCE_2_ADDRESS;
+    /// @notice First quote source address.
+    address public immutable QUOTE_SOURCE_1_ADDRESS;
+    /// @notice Second quote source address.
+    address public immutable QUOTE_SOURCE_2_ADDRESS;
 
-    /// @param vault Vault. Pass address zero to omit this parameter.
-    /// @param baseFeed1 First base feed. Pass address zero if the price = 1.
-    /// @param baseFeed2 Second base feed. Pass address zero if the price = 1.
-    /// @param quoteFeed1 First quote feed. Pass address zero if the price = 1.
-    /// @param quoteFeed2 Second quote feed. Pass address zero if the price = 1.
-    /// @param vaultConversionSample Vault conversion sample. Pass 1 if the oracle does not use a vault.
+    /// @notice First base source getter.
+    function(address,uint) view internal returns (uint) internal immutable BASE_SOURCE_1_GET;
+    /// @notice Second base source getter.
+    function(address,uint) view internal returns (uint) internal immutable BASE_SOURCE_2_GET;
+    /// @notice First quote source getter.
+    function(address,uint) view internal returns (uint) internal immutable QUOTE_SOURCE_1_GET;
+    /// @notice Second quote source getter.
+    function(address,uint) view internal returns (uint) internal immutable QUOTE_SOURCE_2_GET;
+
+    // The vault parameters are used for ERC4626 tokens, to price their shares.
+    /// @notice First base vault conversion sample (0 if first base source is not a vault).
+    uint256 public immutable BASE_VAULT_1_CONVERSION_SAMPLE;
+    /// @notice Second base vault conversion sample (0 if second base source is not a vault).
+    uint256 public immutable BASE_VAULT_2_CONVERSION_SAMPLE;
+    /// @notice First quote vault conversion sample (0 if first quote source is not a vault).
+    uint256 public immutable QUOTE_VAULT_1_CONVERSION_SAMPLE;
+    /// @notice Second quote vault conversion sample (0 if second quote source is not a vault).
+    uint256 public immutable QUOTE_VAULT_2_CONVERSION_SAMPLE;
+
+    /// @param baseSource1 First base source. Pass Source(0,_) if the price = 1. Pass Source(feed,0) if source is a feed.
+    /// @param baseSource2 Second base feed. Pass Source(0,_) if the price = 1. Pass Source(feed,0) if source is a feed.
+    /// @param quoteSource1 First quote feed. Pass Source(0,_) if the price = 1. Pass Source(feed,0) if source is a feed.
+    /// @param quoteSource2 Second quote feed. Pass Source(0,_) if the price = 1. Pass Source(feed,0) if source is a feed.
     /// @param baseTokenDecimals Base token decimals.
     /// @param quoteTokenDecimals Quote token decimals.
     constructor(
-        IERC4626 vault,
-        AggregatorV3Interface baseFeed1,
-        AggregatorV3Interface baseFeed2,
-        AggregatorV3Interface quoteFeed1,
-        AggregatorV3Interface quoteFeed2,
-        uint256 vaultConversionSample,
+        Source memory baseSource1,
+        Source memory baseSource2,
+        Source memory quoteSource1,
+        Source memory quoteSource2,
         uint256 baseTokenDecimals,
         uint256 quoteTokenDecimals
     ) {
-        // The ERC4626 vault parameter is used to price `VAULT_CONVERSION_SAMPLE` of its shares, so it requires dividing
-        // by that number, hence the division by `VAULT_CONVERSION_SAMPLE` in the `SCALE_FACTOR` definition.
-        // Verify that vault = address(0) => vaultConversionSample = 1.
-        require(
-            address(vault) != address(0) || vaultConversionSample == 1, ErrorsLib.VAULT_CONVERSION_SAMPLE_IS_NOT_ONE
-        );
-        require(vaultConversionSample != 0, ErrorsLib.VAULT_CONVERSION_SAMPLE_IS_ZERO);
+        (BASE_SOURCE_1_ADDRESS, BASE_SOURCE_1_GET, BASE_VAULT_1_CONVERSION_SAMPLE) = baseSource1.getParams();
 
-        VAULT = vault;
-        VAULT_CONVERSION_SAMPLE = vaultConversionSample;
-        BASE_FEED_1 = baseFeed1;
-        BASE_FEED_2 = baseFeed2;
-        QUOTE_FEED_1 = quoteFeed1;
-        QUOTE_FEED_2 = quoteFeed2;
+        (BASE_SOURCE_2_ADDRESS, BASE_SOURCE_2_GET, BASE_VAULT_2_CONVERSION_SAMPLE) = baseSource2.getParams();
 
-        // In the following comment, we explain the general case (where we assume that no feed is the address zero)
-        // how to scale the output price as Morpho Blue expects, given the input feed prices.
-        // Similar explanations would hold in the case where some of the feeds are the address zero.
+        (QUOTE_SOURCE_1_ADDRESS, QUOTE_SOURCE_1_GET, QUOTE_VAULT_1_CONVERSION_SAMPLE) = quoteSource1.getParams();
 
-        // Let B1, B2, Q1, Q2, C be 5 assets, each respectively having dB1, dB2, dQ1, dQ2, dC decimals.
-        // Let pB1 and pB2 be the base prices, and pQ1 and pQ2 the quote prices, so that:
-        // - pB1 is the quantity of 1e(dB2) assets B2 that can be exchanged for 1e(dB1) assets B1.
-        // - pB2 is the quantity of 1e(dC) assets C that can be exchanged for 1e(dB2) assets B2.
-        // - pQ1 is the quantity of 1e(dQ2) assets Q2 that can be exchanged for 1e(dQ1) assets Q1.
-        // - pQ2 is the quantity of 1e(dC) assets C that can be exchanged for 1e(dQ2) assets B2.
+        (QUOTE_SOURCE_2_ADDRESS, QUOTE_SOURCE_2_GET, QUOTE_VAULT_2_CONVERSION_SAMPLE) = quoteSource2.getParams();
 
-        // Morpho Blue expects `price()` to be the quantity of 1 asset Q1 that can be exchanged for 1 asset B1,
-        // scaled by 1e36:
-        // 1e36 * (pB1 * 1e(dB2 - dB1)) * (pB2 * 1e(dC - dB2)) / ((pQ1 * 1e(dQ2 - dQ1)) * (pQ2 * 1e(dC - dQ2)))
-        // = 1e36 * (pB1 * 1e(-dB1) * pB2) / (pQ1 * 1e(-dQ1) * pQ2)
-
-        // Let fpB1, fpB2, fpQ1, fpQ2 be the feed precision of the respective prices pB1, pB2, pQ1, pQ2.
-        // Chainlink feeds return pB1 * 1e(fpB1), pB2 * 1e(fpB2), pQ1 * 1e(fpQ1) and pQ2 * 1e(fpQ2).
-
-        // Based on the implementation of `price()` below, the value of `SCALE_FACTOR` should thus satisfy:
-        // (pB1 * 1e(fpB1)) * (pB2 * 1e(fpB2)) * SCALE_FACTOR / ((pQ1 * 1e(fpQ1)) * (pQ2 * 1e(fpQ2)))
-        // = 1e36 * (pB1 * 1e(-dB1) * pB2) / (pQ1 * 1e(-dQ1) * pQ2)
-
+        // Let pB1 and pB2 be the base prices, and pQ1 and pQ2 the quote prices (price taking into account the
+        // decimals of both tokens), in a common currency.
+        // We tackle the most general case in the remainder of this comment, where we assume that no feed is the address
+        // zero. Similar explanations would hold in the case where some of the feeds are the address zero.
+        // Let dB1, dB2, dB3, and dQ1, dQ2, dQ3 be the decimals of the tokens involved.
+        // For example, pB1 is the number of 1e(dB2) of the second base asset that can be obtained from 1e(dB1) of
+        // the first base asset.
+        // We notably have dB3 = dQ3, because those two quantities are the decimals of the same common currency.
+        // Let fpB1, fpB2, fpQ1 and fpQ2 be the feed precision of the corresponding prices.
+        // Chainlink feeds return pB1*1e(fpB1), pB2*1e(fpB2), pQ1*1e(fpQ1) and pQ2*1e(fpQ2).
+        // Because the Blue oracle does not take into account decimals, `price()` should return
+        // 1e36 * (pB1*1e(dB2-dB1) * pB2*1e(dB3-dB2)) / (pQ1*1e(dQ2-dQ1) * pQ2*1e(dQ3-dQ2))
+        // Yet `price()` returns (pB1*1e(fpB1) * pB2*1e(fpB2) * SCALE_FACTOR) / (pQ1*1e(fpQ1) * pQ2*1e(fpQ2))
+        // So 1e36 * pB1 * pB2 * 1e(-dB1) / (pQ1 * pQ2 * 1e(-dQ1)) =
+        // (pB1*1e(fpB1) * pB2*1e(fpB2) * SCALE_FACTOR) / (pQ1*1e(fpQ1) * pQ2*1e(fpQ2))
         // So SCALE_FACTOR = 1e36 * 1e(-dB1) * 1e(dQ1) * 1e(-fpB1) * 1e(-fpB2) * 1e(fpQ1) * 1e(fpQ2)
         //                 = 1e(36 + dQ1 + fpQ1 + fpQ2 - dB1 - fpB1 - fpB2)
-        SCALE_FACTOR = 10
-            ** (
-                36 + quoteTokenDecimals + quoteFeed1.getDecimals() + quoteFeed2.getDecimals() - baseTokenDecimals
-                    - baseFeed1.getDecimals() - baseFeed2.getDecimals()
-            ) / vaultConversionSample;
+        SCALE_FACTOR = 10 ** (
+            36 + quoteTokenDecimals + quoteSource1.getDecimals() + quoteSource2.getDecimals() - baseTokenDecimals
+                - baseSource1.getDecimals() - baseSource2.getDecimals());
     }
 
-    /* PRICE */
-
-    /// @inheritdoc IOracle
     function price() external view returns (uint256) {
-        return (
-            VAULT.getAssets(VAULT_CONVERSION_SAMPLE) * BASE_FEED_1.getPrice() * BASE_FEED_2.getPrice() * SCALE_FACTOR
-        ) / (QUOTE_FEED_1.getPrice() * QUOTE_FEED_2.getPrice());
+        return SCALE_FACTOR * BASE_SOURCE_1_GET(BASE_SOURCE_1_ADDRESS, BASE_VAULT_1_CONVERSION_SAMPLE)
+            * BASE_SOURCE_2_GET(BASE_SOURCE_2_ADDRESS, BASE_VAULT_2_CONVERSION_SAMPLE)
+            / (
+                QUOTE_SOURCE_1_GET(QUOTE_SOURCE_1_ADDRESS, QUOTE_VAULT_1_CONVERSION_SAMPLE)
+                    * QUOTE_SOURCE_2_GET(QUOTE_SOURCE_2_ADDRESS, QUOTE_VAULT_2_CONVERSION_SAMPLE)
+            );
     }
 }

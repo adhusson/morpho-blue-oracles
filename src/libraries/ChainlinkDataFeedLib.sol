@@ -16,10 +16,11 @@ library ChainlinkDataFeedLib {
     /// - Staleness is not checked because it's assumed that the Chainlink feed keeps its promises on this.
     /// - The price is not checked to be in the min/max bounds because it's assumed that the Chainlink feed keeps its
     /// promises on this.
-    function getPrice(AggregatorV3Interface feed) internal view returns (uint256) {
-        if (address(feed) == address(0)) return 1;
+    // We ignore the second argument but must have it to match the signature of VaultLib.getAssets(vault,sharesAmount)
+    function getPrice(address feed, uint256) internal view returns (uint256) {
+        if (feed == address(0)) return 1;
 
-        (, int256 answer,,,) = feed.latestRoundData();
+        (, int256 answer,,,) = AggregatorV3Interface(feed).latestRoundData();
         require(answer >= 0, ErrorsLib.NEGATIVE_ANSWER);
 
         return uint256(answer);
@@ -27,9 +28,9 @@ library ChainlinkDataFeedLib {
 
     /// @dev Returns the number of decimals of a `feed`.
     /// @dev When `feed` is the address zero, returns 0.
-    function getDecimals(AggregatorV3Interface feed) internal view returns (uint256) {
-        if (address(feed) == address(0)) return 0;
+    function getDecimals(address feed) internal view returns (uint256) {
+        if (feed == address(0)) return 0;
 
-        return feed.decimals();
+        return AggregatorV3Interface(feed).decimals();
     }
 }

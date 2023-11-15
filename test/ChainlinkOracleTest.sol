@@ -24,16 +24,26 @@ AggregatorV3Interface constant ethUsdFeed = AggregatorV3Interface(0x5f4eC3Df9cbd
 // 18 decimals of precision
 AggregatorV3Interface constant daiEthFeed = AggregatorV3Interface(0x773616E4d11A78F511299002da57A0a94577F1f4);
 
-IERC4626 constant vaultZero = IERC4626(address(0));
+function source(AggregatorV3Interface feed) pure returns (Source memory) {
+    return Source(address(feed), 0);
+}
+
+function source(IERC4626 vault, uint256 conversionSample) pure returns (Source memory) {
+    return Source(address(vault), conversionSample);
+}
+
 IERC4626 constant sDaiVault = IERC4626(0x83F20F44975D03b1b09e64809B757c47f942BEeA);
 
 contract ChainlinkOracleTest is Test {
+    Source sourceZero = Source(address(0), 0);
+
     function setUp() public {
         vm.createSelectFork(vm.envString("ETH_RPC_URL"));
     }
 
     function testOracleWbtcUsdc() public {
-        ChainlinkOracle oracle = new ChainlinkOracle(vaultZero, wBtcBtcFeed, btcUsdFeed, usdcUsdFeed, feedZero, 1, 8, 6);
+        ChainlinkOracle oracle =
+            new ChainlinkOracle( source(wBtcBtcFeed), source(btcUsdFeed), source(usdcUsdFeed), sourceZero, 8, 6);
         (, int256 firstBaseAnswer,,,) = wBtcBtcFeed.latestRoundData();
         (, int256 secondBaseAnswer,,,) = btcUsdFeed.latestRoundData();
         (, int256 quoteAnswer,,,) = usdcUsdFeed.latestRoundData();
@@ -45,7 +55,8 @@ contract ChainlinkOracleTest is Test {
     }
 
     function testOracleUsdcWbtc() public {
-        ChainlinkOracle oracle = new ChainlinkOracle(vaultZero, usdcUsdFeed, feedZero, wBtcBtcFeed, btcUsdFeed, 1, 6, 8);
+        ChainlinkOracle oracle =
+            new ChainlinkOracle(source(usdcUsdFeed),sourceZero,source(wBtcBtcFeed), source(btcUsdFeed), 6, 8);
         (, int256 baseAnswer,,,) = usdcUsdFeed.latestRoundData();
         (, int256 firstQuoteAnswer,,,) = wBtcBtcFeed.latestRoundData();
         (, int256 secondQuoteAnswer,,,) = btcUsdFeed.latestRoundData();
@@ -57,41 +68,43 @@ contract ChainlinkOracleTest is Test {
     }
 
     function testOracleWbtcEth() public {
-        ChainlinkOracle oracle = new ChainlinkOracle(vaultZero,wBtcBtcFeed, btcEthFeed, feedZero, feedZero, 1, 8, 18);
+        ChainlinkOracle oracle =
+            new ChainlinkOracle(source(wBtcBtcFeed), source(btcEthFeed), sourceZero, sourceZero, 8, 18);
         (, int256 firstBaseAnswer,,,) = wBtcBtcFeed.latestRoundData();
         (, int256 secondBaseAnswer,,,) = btcEthFeed.latestRoundData();
         assertEq(oracle.price(), (uint256(firstBaseAnswer) * uint256(secondBaseAnswer) * 10 ** (36 + 18 - 8 - 8 - 18)));
     }
 
     function testOracleStEthUsdc() public {
-        ChainlinkOracle oracle = new ChainlinkOracle(vaultZero, stEthEthFeed, feedZero, usdcEthFeed, feedZero, 1, 18, 6);
+        ChainlinkOracle oracle =
+            new ChainlinkOracle(source(stEthEthFeed), sourceZero, source(usdcEthFeed), sourceZero, 18, 6);
         (, int256 baseAnswer,,,) = stEthEthFeed.latestRoundData();
         (, int256 quoteAnswer,,,) = usdcEthFeed.latestRoundData();
         assertEq(oracle.price(), uint256(baseAnswer) * 10 ** (36 + 18 + 6 - 18 - 18) / uint256(quoteAnswer));
     }
 
     function testOracleEthUsd() public {
-        ChainlinkOracle oracle = new ChainlinkOracle(vaultZero, ethUsdFeed, feedZero, feedZero, feedZero, 1, 18, 0);
+        ChainlinkOracle oracle = new ChainlinkOracle(source(ethUsdFeed),sourceZero,sourceZero,sourceZero, 18, 0);
         (, int256 expectedPrice,,,) = ethUsdFeed.latestRoundData();
         assertEq(oracle.price(), uint256(expectedPrice) * 10 ** (36 - 18 - 8));
     }
 
     function testOracleStEthEth() public {
-        ChainlinkOracle oracle = new ChainlinkOracle(vaultZero, stEthEthFeed, feedZero, feedZero, feedZero, 1, 18, 18);
+        ChainlinkOracle oracle = new ChainlinkOracle(source(stEthEthFeed), sourceZero, sourceZero, sourceZero,18, 18);
         (, int256 expectedPrice,,,) = stEthEthFeed.latestRoundData();
         assertEq(oracle.price(), uint256(expectedPrice) * 10 ** (36 + 18 - 18 - 18));
         assertApproxEqRel(oracle.price(), 1e36, 0.01 ether);
     }
 
     function testOracleEthStEth() public {
-        ChainlinkOracle oracle = new ChainlinkOracle(vaultZero, feedZero, feedZero, stEthEthFeed, feedZero, 1, 18, 18);
+        ChainlinkOracle oracle = new ChainlinkOracle(sourceZero,sourceZero,source(stEthEthFeed), sourceZero, 18, 18);
         (, int256 expectedPrice,,,) = stEthEthFeed.latestRoundData();
         assertEq(oracle.price(), 10 ** (36 + 18 + 18 - 18) / uint256(expectedPrice));
         assertApproxEqRel(oracle.price(), 1e36, 0.01 ether);
     }
 
     function testOracleUsdcUsd() public {
-        ChainlinkOracle oracle = new ChainlinkOracle(vaultZero, usdcUsdFeed, feedZero, feedZero, feedZero, 1, 6, 0);
+        ChainlinkOracle oracle = new ChainlinkOracle(source(usdcUsdFeed), sourceZero, sourceZero, sourceZero, 6, 0);
         assertApproxEqRel(oracle.price(), 1e36 / 1e6, 0.01 ether);
     }
 
@@ -99,30 +112,45 @@ contract ChainlinkOracleTest is Test {
         price = bound(price, type(int256).min, -1);
         ChainlinkAggregatorMock aggregator = new ChainlinkAggregatorMock();
         ChainlinkOracle oracle =
-        new ChainlinkOracle(vaultZero, AggregatorV3Interface(address(aggregator)), feedZero, feedZero, feedZero, 1, 18, 0);
+            new ChainlinkOracle(Source(address(aggregator),0), sourceZero, sourceZero, sourceZero, 18, 0);
         aggregator.setAnwser(price);
         vm.expectRevert(bytes(ErrorsLib.NEGATIVE_ANSWER));
         oracle.price();
     }
 
     function testSDaiEthOracle() public {
+        uint256 sampleDecimals = 18;
         ChainlinkOracle oracle =
-            new ChainlinkOracle(sDaiVault, daiEthFeed, feedZero, feedZero, feedZero, 10 ** 18, 18, 18);
+            new ChainlinkOracle(source(sDaiVault,sampleDecimals), source(daiEthFeed), sourceZero, sourceZero, 18, 18);
         (, int256 expectedPrice,,,) = daiEthFeed.latestRoundData();
         assertEq(
             oracle.price(),
-            sDaiVault.convertToAssets(1e18) * uint256(expectedPrice) * 10 ** (36 + 18 + 0 - 18 - 18 - 18)
+            sDaiVault.convertToAssets(10**sampleDecimals) * uint256(expectedPrice) * 10 ** (36 + 18 + 0 - 18 - 18 - sampleDecimals)
+        );
+    }
+
+    // Must change vault conversion sample to 1e4 or overflow in computing
+    // SCALE_FACTOR. Should move to 512 bit multiplication.
+    function testEthSDaiOracle() public {
+        uint256 sampleDecimals = 18;
+        ChainlinkOracle oracle =
+            new ChainlinkOracle(sourceZero, sourceZero, source(sDaiVault,sampleDecimals), source(daiEthFeed), 18, 18);
+        (, int256 expectedPrice,,,) = daiEthFeed.latestRoundData();
+        assertEq(
+            1e36 * 1e36 / oracle.price(),
+            sDaiVault.convertToAssets(10**sampleDecimals) * uint256(expectedPrice) * 10 ** (36 + 18 + 0 - 18 - 18 - sampleDecimals)
         );
     }
 
     function testSDaiUsdcOracle() public {
+        uint256 sampleDecimals = 18;
         ChainlinkOracle oracle =
-            new ChainlinkOracle(sDaiVault, daiEthFeed, feedZero, usdcEthFeed, feedZero, 10 ** 18, 18, 6);
+        new ChainlinkOracle(source(sDaiVault,sampleDecimals), source(daiEthFeed), source(usdcEthFeed), sourceZero, 18, 6);
         (, int256 baseAnswer,,,) = daiEthFeed.latestRoundData();
         (, int256 quoteAnswer,,,) = usdcEthFeed.latestRoundData();
         assertEq(
             oracle.price(),
-            sDaiVault.convertToAssets(1e18) * uint256(baseAnswer) * 10 ** (36 + 6 + 18 - 18 - 18 - 18)
+            sDaiVault.convertToAssets(10**sampleDecimals) * uint256(baseAnswer) * 10 ** (36 + 6 + 18 - 18 - 18 - sampleDecimals)
                 / uint256(quoteAnswer)
         );
         // DAI has 12 more decimals than USDC.
@@ -132,15 +160,23 @@ contract ChainlinkOracleTest is Test {
         assertApproxEqRel(oracle.price(), expectedPrice, deviation);
     }
 
-    function testConstructorZeroVaultConversionSample() public {
-        vm.expectRevert(bytes(ErrorsLib.VAULT_CONVERSION_SAMPLE_IS_ZERO));
-        new ChainlinkOracle(sDaiVault, daiEthFeed, feedZero, usdcEthFeed, feedZero, 0, 18, 6);
-    }
-
-    function testConstructorVaultZeroNonOneSample(uint256 vaultConversionSample) public {
-        vaultConversionSample = bound(vaultConversionSample, 2, type(uint256).max);
-
-        vm.expectRevert(bytes(ErrorsLib.VAULT_CONVERSION_SAMPLE_IS_NOT_ONE));
-        new ChainlinkOracle(vaultZero, daiEthFeed, feedZero, usdcEthFeed, feedZero, vaultConversionSample, 18, 6);
+    // Had to set vault conversion sample to 1e14 or there is an overflow.
+    // Should move to 512 bit multiplication.
+    function testUsdcSDaiOracle() public {
+        uint256 sampleDecimals = 14;
+        ChainlinkOracle oracle =
+        new ChainlinkOracle(source(usdcEthFeed), sourceZero, source(sDaiVault,sampleDecimals), source(daiEthFeed), 6, 18);
+        (, int256 baseAnswer,,,) = daiEthFeed.latestRoundData();
+        (, int256 quoteAnswer,,,) = usdcEthFeed.latestRoundData();
+        assertEq(
+            1e36 * 1e36 / oracle.price(),
+            sDaiVault.convertToAssets(10**sampleDecimals) * uint256(baseAnswer) * 10 ** (36 + 6 + 18 - 18 - 18 - sampleDecimals)
+                / uint256(quoteAnswer)
+        );
+        // DAI has 12 more decimals than USDC.
+        uint256 expectedPrice = 10 ** (36 + 12);
+        // Admit a 50% interest gain before breaking this test.
+        uint256 deviation = 0.5 ether;
+        assertApproxEqRel(oracle.price(), expectedPrice, deviation);
     }
 }
